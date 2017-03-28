@@ -46,18 +46,21 @@ int fileExists(char * file)
 
 bool Inject(const char* dll_path, DWORD process_id)
 {
-	bool return_value = false; // Only set to true if we succeed fully
+	bool succeeded = false; // Only set to true if we succeed fully
+	// Returning early skips over closing handles and deallocating, so we use this instead
 
 	HANDLE process_handle = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE,
 		FALSE, process_id);
 
 	if (process_handle != NULL)
 	{
-		size_t path_size = strlen(dll_path) + 1; // 1 for null terminator
+		// Allocate memory for the dll path
+		size_t path_size = sizeof(dll_path[0]) * (strlen(dll_path) + 1); // 1 for null terminator
 		void* path_alloc = VirtualAllocEx(process_handle, NULL, path_size, MEM_COMMIT, PAGE_READWRITE);
 
 		if (path_alloc && WriteProcessMemory(process_handle, path_alloc, dll_path, path_size, NULL))
 		{
+			// Find the processes loadlibrary, any windows app should have their own
 			void* load_library_fn = GetProcAddress(GetModuleHandleA("Kernel32.dll"), "LoadLibraryA");
 
 			if (load_library_fn)
@@ -66,25 +69,25 @@ bool Inject(const char* dll_path, DWORD process_id)
 				HANDLE thread_handle = CreateRemoteThread(process_handle, NULL, 0, (LPTHREAD_START_ROUTINE)load_library_fn, path_alloc, 0, NULL);
 				if (thread_handle != NULL)
 				{
-					// Wait for the remote thread to end
+					// Wait until the thread ends so we don't close the handle early
 					WaitForSingleObject(thread_handle, INFINITE);
 					CloseHandle(thread_handle);
-					return_value = true;
+					succeeded = true;
 				}
 			}
 		}
+
 		VirtualFreeEx(process_handle, path_alloc, path_size, MEM_DECOMMIT);
 	}
 
 	CloseHandle(process_handle);
 
-	return return_value;
+	return succeeded;
 }
 
 int main(int argc, const char *argv[])
 {
 	// Usage: interject <PID> <DLL_PATH>
-	// You can
 	if (argc != 3)
 	{
 		puts("Parameter sequence invalid\nUsage: interject <PID> <DLL_PATH>");
