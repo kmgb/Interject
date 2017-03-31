@@ -31,56 +31,57 @@ STR2INT_ERROR str2int(long &i, const char *s, int base = 0)
 }
 
 // http://stackoverflow.com/questions/3828835/how-can-we-check-if-a-file-exists-or-not-using-win32-program
-int fileExists(char * file)
+bool FileExists(char * filePath)
 {
-	WIN32_FIND_DATAA FindFileData;
-	HANDLE handle = FindFirstFileA(file, &FindFileData);
-	int found = handle != INVALID_HANDLE_VALUE;
-	if (found)
+	WIN32_FIND_DATAA findFileData;
+	HANDLE handle = FindFirstFileA(filePath, &findFileData);
+
+	if (handle != INVALID_HANDLE_VALUE)
 	{
-		//FindClose(&handle); this will crash
 		FindClose(handle);
+		return true;
 	}
-	return found;
+
+	return false;
 }
 
-bool Inject(const char* dll_path, DWORD process_id)
+bool Inject(const char* dllPath, DWORD process_id)
 {
 	bool succeeded = false; // Only set to true if we succeed fully
 	// Returning early skips over closing handles and deallocating, so we use this instead
 
-	HANDLE process_handle = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE,
+	HANDLE hProcess = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE,
 		FALSE, process_id);
 
-	if (process_handle != NULL)
+	if (hProcess != NULL)
 	{
 		// Allocate memory for the dll path
-		size_t path_size = sizeof(dll_path[0]) * (strlen(dll_path) + 1); // 1 for null terminator
-		void* path_alloc = VirtualAllocEx(process_handle, NULL, path_size, MEM_COMMIT, PAGE_READWRITE);
+		size_t dllPathSize = sizeof(dllPath[0]) * (strlen(dllPath) + 1); // 1 for null terminator
+		void* pAlloc = VirtualAllocEx(hProcess, NULL, dllPathSize, MEM_COMMIT, PAGE_READWRITE);
 
-		if (path_alloc && WriteProcessMemory(process_handle, path_alloc, dll_path, path_size, NULL))
+		if (pAlloc && WriteProcessMemory(hProcess, pAlloc, dllPath, dllPathSize, NULL))
 		{
 			// Find the processes loadlibrary, any windows app should have their own
-			void* load_library_fn = GetProcAddress(GetModuleHandleA("Kernel32.dll"), "LoadLibraryA");
+			void* loadLibraryFn = GetProcAddress(GetModuleHandleA("Kernel32.dll"), "LoadLibraryA");
 
-			if (load_library_fn)
+			if (loadLibraryFn)
 			{
 				// Call LoadLibraryA through the target process
-				HANDLE thread_handle = CreateRemoteThread(process_handle, NULL, 0, (LPTHREAD_START_ROUTINE)load_library_fn, path_alloc, 0, NULL);
-				if (thread_handle != NULL)
+				HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)loadLibraryFn, pAlloc, 0, NULL);
+				if (hThread != NULL)
 				{
 					// Wait until the thread ends so we don't close the handle early
-					WaitForSingleObject(thread_handle, INFINITE);
-					CloseHandle(thread_handle);
+					WaitForSingleObject(hThread, INFINITE);
+					CloseHandle(hThread);
 					succeeded = true;
 				}
 			}
 		}
 
-		VirtualFreeEx(process_handle, path_alloc, path_size, MEM_DECOMMIT);
+		VirtualFreeEx(hProcess, pAlloc, dllPathSize, MEM_DECOMMIT);
 	}
 
-	CloseHandle(process_handle);
+	CloseHandle(hProcess);
 
 	return succeeded;
 }
@@ -102,21 +103,21 @@ int main(int argc, const char *argv[])
 	}
 
 	// TODO: GetFullPathName isn't a safe function...
-	char dll_path[MAX_PATH];
+	char dllPath[MAX_PATH];
 	LPSTR* lppPart = { NULL };
-	if (GetFullPathNameA(argv[2], MAX_PATH, dll_path, lppPart) == 0)
+	if (GetFullPathNameA(argv[2], MAX_PATH, dllPath, lppPart) == 0)
 	{
 		puts("GetFullPathName error, sorry :/");
 		return 3;
 	}
 
-	if (!fileExists(dll_path))
+	if (!FileExists(dllPath))
 	{
 		puts("File doesn't exist");
 		return 4;
 	}
 
-	if (!Inject(dll_path, pid))
+	if (!Inject(dllPath, pid))
 	{
 		puts("Injection failed");
 		return 5;
